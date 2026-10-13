@@ -4,22 +4,22 @@
 model:
   llm:
     provider: "openai"
-    model_name: "gemini-3.1-pro-preview"
+    model_name: "gpt-5-mini"
     api_base: null
 
   planner_llm:
     provider: "openai"
-    model_name: "gemini-3.1-pro-preview"
+    model_name: "gpt-5-mini"
     api_base: null
 
   constructor_llm:
     provider: "openai"
-    model_name: "gemini-3.1-pro-preview"
+    model_name: "gpt-5-mini"
     api_base: null
 
   vision:
     provider: "openai"
-    model_name: "gemini-3.1-pro-preview"
+    model_name: "gpt-5-mini"
 
 prompts:
   planner: "planner_wall_art"

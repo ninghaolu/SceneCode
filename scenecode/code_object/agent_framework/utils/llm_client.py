@@ -166,6 +166,8 @@ class OpenAIClient(LLMClient):
                 if self.api_base:
                     kwargs["base_url"] = self.api_base
                 
+                from scenecode.utils.model_audit import audited_http_client
+                kwargs.update(audited_http_client(asynchronous=True))
                 self._client = AsyncOpenAI(**kwargs)
             except ImportError:
                 raise ImportError("Please install openai: pip install openai")
@@ -265,9 +267,16 @@ class OpenAIClient(LLMClient):
         create_kwargs: Dict[str, Any] = {
             "model": model,
             "messages": safe_messages,
-            "temperature": kwargs.get("temperature", self.temperature),
-            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
         }
+        if model_lc.startswith("gpt-5"):
+            # GPT-5 uses a completion budget that also includes reasoning tokens.
+            # Omit temperature so reasoning-enabled requests remain compatible.
+            create_kwargs["max_completion_tokens"] = kwargs.get(
+                "max_completion_tokens", kwargs.get("max_tokens", self.max_tokens)
+            )
+        else:
+            create_kwargs["temperature"] = kwargs.get("temperature", self.temperature)
+            create_kwargs["max_tokens"] = kwargs.get("max_tokens", self.max_tokens)
 
         # 转发 tools / tool_choice（原生 function calling）
         if kwargs.get("tools"):

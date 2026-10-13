@@ -87,6 +87,13 @@ Determine the best furniture category:
 - Normalize the maximum dimension of the object to `1`
 - Identify the style characteristics of the object
 - Pay attention to the overall proportions of the object
+- Distinguish rounded outline corners from rounded thickness. A slab tabletop
+  with gently rounded corners still has a broad planar top, upright sides and
+  limited edge bevels. Do not describe it as pill-shaped, inflated or organic
+  unless that three-dimensional profile is actually visible in the reference.
+- Preserve explicit part counts and distinctive visible construction. For doors
+  with slats, handles or relief, specify the exposed face relative to the cabinet
+  opening; the detail must face outward rather than into the cabinet.
 - If the input is text and information is missing, make the minimum necessary assumptions and reflect the basis for the assumptions in `description`
 
 ### 3. Part decomposition
@@ -176,6 +183,11 @@ For movable parts such as drawers, cabinet doors, and sliding doors, the followi
 ## Notes
 
 1. **Symmetry**: if a part is symmetric (such as chair legs), mark `is_symmetric = true`, and only one needs to be described in detail; the others are generated through symmetry
+   - For a rectangular support layout, prefer explicit named `instances` with
+     each corner position. A quarter-turn maps (x,y) to (-y,x), so four rotations
+     of an off-axis leg do NOT produce the corners of a non-square rectangle.
+     Reserve radial arrays for genuinely radial layouts. With explicit instances,
+     set `is_symmetric=false` and omit array/mirror modifiers to avoid extra copies.
 
 2. **Dimension estimation**: use meters as the unit, and normalize the maximum dimension to `1`
 
@@ -229,14 +241,19 @@ Output:
       "shape": {
         "base_shape": "cylinder",
         "dimensions": { "width": 0.055, "depth": 0.055, "height": 0.45 },
-        "modifiers": ["bevel", "smooth", "array_rotate_z_4"],
-        "description": "Reference cylindrical wooden leg. Generate 4 legs in the Z-axis direction through Array/rotation (0/90/180/270 degrees), with slight beveling at the bottom to prevent edge chipping; the overall shape is slightly outward-splayed (tilting outward)."
+        "modifiers": ["bevel", "smooth"],
+        "description": "Four cylindrical wooden legs at the rectangular seat corners, each explicitly positioned to support the seat."
       },
       "position": { "x": -0.22, "y": -0.2, "z": 0.225 },
-      "rotation": { "x": -6.0, "y": 6.0, "z": 0.0 },
-      "is_symmetric": true,
-      "symmetric_axis": "z",
-      "description": "Leg group (instance array): first place one reference leg at (-0.22,-0.20,0.225), then rotate and copy it around the world/chair center Z axis to obtain the other three: +90 degrees, +180 degrees, +270 degrees.",
+      "rotation": { "x": 0.0, "y": 0.0, "z": 0.0 },
+      "is_symmetric": false,
+      "instances": [
+        {"name": "leg_front_left", "position": {"x": -0.22, "y": -0.20, "z": 0.225}},
+        {"name": "leg_front_right", "position": {"x": 0.22, "y": -0.20, "z": 0.225}},
+        {"name": "leg_back_left", "position": {"x": -0.22, "y": 0.20, "z": 0.225}},
+        {"name": "leg_back_right", "position": {"x": 0.22, "y": 0.20, "z": 0.225}}
+      ],
+      "description": "Four named instances at the rectangular support positions; the template is not an extra physical leg.",
       "priority": 1
     },
     {

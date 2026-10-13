@@ -4,6 +4,7 @@ Planner Checker Agent
 """
 
 import base64
+import json
 import re
 from typing import Any, Dict, Optional, List, Tuple
 from pathlib import Path
@@ -132,6 +133,10 @@ class PlannerCheckerAgent(BaseAgent):
         for req_type in required_types:
             # 特殊处理 legs（可能是 leg）
             type_variants = [req_type, req_type.rstrip('s'), req_type + 's']
+            if category == "table" and req_type == "legs":
+                # Pedestal/plinth tables are valid designs. Visual and geometric
+                # checks still have to establish that the support touches the top.
+                type_variants += ["base", "pedestal", "plinth", "trestle", "support", "supports", "side_panel", "side_panels"]
             if not any(t in part_types for t in type_variants):
                 issues.append(CheckIssue(
                     severity="error",
@@ -421,6 +426,31 @@ ObjectPlan:
 Output the check result strictly in the required format."""
                 }
             ]
+        bounds = []
+        for part in plan.parts:
+            p = part.to_dict()
+            rotation = p.get("rotation", {})
+            if any(abs(float(v)) > 1e-8 for v in rotation.values()) or p.get("instances"):
+                continue
+            center = p["position"]
+            dimensions = p["shape"]["dimensions"]
+            bounds.append({"part": p["name"], "part_type": p["part_type"],
+                "bounds_min": {a: round(center[a] - dimensions[d] / 2, 6)
+                               for a, d in zip("xyz", ("width", "depth", "height"))},
+                "bounds_max": {a: round(center[a] + dimensions[d] / 2, 6)
+                               for a, d in zip("xyz", ("width", "depth", "height"))}})
+        user_content.append({"type": "text", "text": (
+            "Independent arithmetic for unrotated part bounding boxes follows. "
+            "Positions are CENTERS, not bottom coordinates. A base centered at half its "
+            "height correctly rests on z=0. Use these computed bounds for gap/overlap "
+            "claims; positive center Z alone never implies floating. Ignore minor "
+            "stylistic differences; reserve errors for concrete missing functionality "
+            "or incorrect geometry, and label uncertain aesthetic suggestions as warnings. "
+            "This is offline Blender modeling with NO gravity or physics during part creation. "
+            "Independent parts are placed at absolute coordinates, so a tabletop may be "
+            "created before its base. Creation priority is not a physical-assembly or "
+            "stability constraint; flag only actual code dependencies.\n"
+            + json.dumps(bounds))})
         messages.append({"role": "user", "content": user_content})
         
         response = await self._call_llm(messages)
@@ -484,6 +514,11 @@ Output the check result strictly in the required format."""
                 all_corrections.update(llm_corrections)
             except Exception as e:
                 self.logger.warning(f"LLM check failed: {e}")
+                all_issues.append(CheckIssue(
+                    severity="error", category="validation_failure",
+                    description=f"LLM check failed: {e}",
+                    suggestion="Retry the check; this is not evidence of a geometry defect.",
+                ))
         
         # 计算分数
         score = self._calculate_score(all_issues)
@@ -545,14 +580,24 @@ Output the check result strictly in the required format."""
                 text_input=text_input
             )
             check_history.append(result)
+            from scenecode.utils.model_audit import audit_context
+            from scenecode.utils.artifact_history import snapshot
+            asset_dir = audit_context.get().get("asset_output_dir")
+            if asset_dir:
+                snapshot(Path(asset_dir) / "plan_check.json", {
+                    "attempt": attempt + 1, "plan": current_plan.to_dict(),
+                    "check": result.to_dict(),
+                })
             
             # 如果通过，返回
             if result.is_valid:
                 self.logger.info("Plan check passed!")
                 return current_plan, check_history
+            if any(issue.category == "validation_failure" for issue in result.issues):
+                continue
             
             # 如果有修正建议，应用修正（基于现有 ObjectPlan 做最小修改）
-            if result.corrections and planner_agent:
+            if (result.corrections or result.issues) and planner_agent and attempt + 1 < max_retry:
                 self.logger.info("Applying corrections via ObjectPlan revision (no full re-planning)...")
                 
                 # 构建修正上下文（仅包含摘要与问题列表，原始 JSON 由 Planner 侧注入）

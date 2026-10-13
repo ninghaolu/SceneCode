@@ -1,6 +1,7 @@
 """Unit tests for shared OpenAI helper utilities."""
 
 import pytest
+from openai import AsyncOpenAI
 
 from unittest.mock import AsyncMock
 
@@ -153,14 +154,14 @@ def test_extract_openai_usage_stats_defaults_missing_fields_to_zero():
 @pytest.mark.asyncio
 async def test_close_cached_async_openai_clients_closes_and_clears_cache(monkeypatch):
     """Cached async clients should be closed and removed during cleanup."""
-    client_one = AsyncMock()
-    client_two = AsyncMock()
+    client_one = AsyncMock(spec=AsyncOpenAI)
+    client_two = AsyncMock(spec=AsyncOpenAI)
     cache = {"one": client_one, "two": client_two}
 
     monkeypatch.setattr("scenecode.utils.openai._DEFAULT_ASYNC_CLIENTS", cache)
 
     await close_cached_async_openai_clients()
 
-    client_one.aclose.assert_awaited_once()
-    client_two.aclose.assert_awaited_once()
+    client_one.close.assert_awaited_once()
+    client_two.close.assert_awaited_once()
     assert cache == {}

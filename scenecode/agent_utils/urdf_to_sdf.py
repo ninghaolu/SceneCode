@@ -587,8 +587,7 @@ def merge_link_visual_meshes_for_sdf(
         )
         return output_gltf
     except Exception as e:
-        console_logger.warning(f"Failed to merge visual meshes for {link_name}: {e}")
-        return None
+        raise RuntimeError(f"Failed to merge visual meshes for {link_name}: {e}") from e
 
 
 def generate_link_collision_geometry_for_sdf(
@@ -898,7 +897,7 @@ def convert_urdf_link_to_sdf(
 
 
 def convert_urdf_joint_to_sdf(
-    urdf_joint: ET.Element, include_dynamics: bool = True
+    urdf_joint: ET.Element, include_dynamics: bool = True, scale_factor: float = 1.0
 ) -> ET.Element:
     """Convert URDF joint element to SDF format.
 
@@ -911,6 +910,7 @@ def convert_urdf_joint_to_sdf(
     Args:
         urdf_joint: URDF <joint> element.
         include_dynamics: Whether to include damping/friction dynamics.
+        scale_factor: Geometry scale, applied to prismatic travel and velocity.
 
     Returns:
         SDF <joint> element.
@@ -965,6 +965,11 @@ def convert_urdf_joint_to_sdf(
             upper = limit_elem.get("upper")
             effort = limit_elem.get("effort")
             velocity = limit_elem.get("velocity")
+
+            if joint_type == "prismatic":
+                lower = str(float(lower) * scale_factor) if lower is not None else None
+                upper = str(float(upper) * scale_factor) if upper is not None else None
+                velocity = str(float(velocity) * scale_factor) if velocity is not None else None
 
             if lower is not None:
                 ET.SubElement(sdf_limit, "lower").text = lower
@@ -1171,7 +1176,7 @@ def convert_urdf_to_sdf(
 
     # Convert joints.
     for urdf_joint in urdf_result.joints.values():
-        sdf_joint = convert_urdf_joint_to_sdf(urdf_joint)
+        sdf_joint = convert_urdf_joint_to_sdf(urdf_joint, scale_factor=scale_factor)
         model.append(sdf_joint)
 
     # Format XML with indentation.
@@ -1404,150 +1409,96 @@ def compute_articulated_bounding_box(
 def compute_sdf_bounding_box(
     sdf_path: Path,
     scale_factor: float = 1.0,
+    *,
+    link_name: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute bounding box from SDF visual meshes with transforms applied.
 
-    This computes the bounding box by loading GLTF meshes from the SDF's visual
-    directory and applying the link pose transforms defined in the SDF. This
-    accounts for coordinate frame changes introduced by the GLTF Y-up export.
+    Loads the actual mesh URIs and composes mesh-node, visual, and link poses,
+    including GLTF's Y-up convention. Uses scales already written into the SDF.
+    Missing, empty, unsupported, or non-finite geometry raises an error.
 
     Note: The bounding box is computed in model frame (without model-level pose),
     suitable for computing the canonicalization pose.
 
     Args:
         sdf_path: Path to SDF file.
-        scale_factor: Scale factor applied to mesh geometry (from <scale> element).
+        scale_factor: Legacy compatibility argument. Scaling is read from the SDF
+            so callers cannot accidentally apply it twice.
+        link_name: Optionally restrict vertices to one link, retaining all frames.
 
     Returns:
         Tuple of (min_xyz, max_xyz, center) arrays in model frame.
     """
-    sdf_dir = sdf_path.parent
-    visual_dir = sdf_dir / "visual"
-
-    if not visual_dir.exists():
-        console_logger.warning(f"Visual directory not found: {visual_dir}")
-        return np.zeros(3), np.zeros(3), np.zeros(3)
-
-    # Parse SDF to get link poses.
-    tree = ET.parse(sdf_path)
-    root = tree.getroot()
-    model = root.find("model")
+    # The SDF already contains scaled translations and mesh scale elements.
+    # scale_factor is retained for caller compatibility, never applied twice.
+    sdf_path = Path(sdf_path)
+    model = ET.parse(sdf_path).getroot().find("model")
     if model is None:
-        console_logger.warning("No model element found in SDF")
-        return np.zeros(3), np.zeros(3), np.zeros(3)
+        raise ValueError(f"No model in {sdf_path}")
+    frames = {}
+    for element in [*model.findall("link"), *model.findall("frame")]:
+        pose = element.find("pose")
+        values = [float(x) for x in (pose.text or "0 0 0 0 0 0").split()] if pose is not None else [0.] * 6
+        transform = np.eye(4)
+        transform[:3, :3] = Rotation.from_euler("xyz", values[3:6]).as_matrix()
+        transform[:3, 3] = values[:3]
+        parent = pose.get("relative_to") if pose is not None else None
+        frames[element.get("name")] = (parent or element.get("attached_to", "__model__"), transform)
 
-    # First pass: collect raw poses and relative_to info.
-    # SDF uses relative_to for pose inheritance, so we need to resolve the chain.
-    raw_poses: dict[str, tuple[np.ndarray, np.ndarray, str | None]] = {}
+    def resolve(name, visited=frozenset()):
+        if name in (None, "__model__", model.get("name")):
+            return np.eye(4)
+        if name in visited or name not in frames:
+            raise ValueError(f"Unresolvable SDF frame {name!r} in {sdf_path}")
+        parent, local = frames[name]
+        return resolve(parent, visited | {name}) @ local
 
+    vertices = []
     for link in model.findall("link"):
-        link_name = link.get("name", "")
-        pose_elem = link.find("pose")
-
-        if pose_elem is not None and pose_elem.text:
-            values = [float(v) for v in pose_elem.text.strip().split()]
-            xyz = np.array(values[:3])
-            rpy = values[3:6]
-            rot = Rotation.from_euler("xyz", rpy).as_matrix()
-            relative_to = pose_elem.get("relative_to", None)
-        else:
-            xyz = np.zeros(3)
-            rot = np.eye(3)
-            relative_to = None
-
-        raw_poses[link_name] = (xyz, rot, relative_to)
-
-    # Second pass: resolve relative_to chain to get model-frame poses.
-    link_poses: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-
-    def resolve_pose(
-        name: str, visited: set | None = None
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Recursively resolve pose chain to get model-frame pose."""
-        if visited is None:
-            visited = set()
-
-        if name in link_poses:
-            return link_poses[name]
-
-        if name in visited:
-            console_logger.warning(f"Circular reference in pose chain: {name}")
-            return np.zeros(3), np.eye(3)
-        visited.add(name)
-
-        if name not in raw_poses:
-            # Unknown link or "base" - return identity (model frame origin).
-            return np.zeros(3), np.eye(3)
-
-        xyz, rot, relative_to = raw_poses[name]
-
-        if relative_to is None or relative_to == "__model__" or relative_to == "base":
-            # Directly relative to model frame.
-            model_xyz, model_rot = xyz, rot
-        else:
-            # Relative to another link - compose transforms.
-            parent_xyz, parent_rot = resolve_pose(relative_to, visited)
-            # T_model_link = T_model_parent * T_parent_link
-            model_xyz = parent_rot @ xyz + parent_xyz
-            model_rot = parent_rot @ rot
-
-        link_poses[name] = (model_xyz, model_rot)
-        return model_xyz, model_rot
-
-    for name in raw_poses:
-        resolve_pose(name)
-
-    # Load GLTF meshes and apply transforms.
-    all_verts_world = []
-
-    for gltf_path in visual_dir.glob("*.gltf"):
-        # Extract link name from filename (e.g., "link_0_visual.gltf" -> "link_0").
-        link_name = gltf_path.stem.replace("_visual", "")
-
-        if link_name not in link_poses:
+        if link_name is not None and link.get("name") != link_name:
             continue
-
-        try:
-            mesh = trimesh.load(gltf_path, force="mesh")
-            if isinstance(mesh, trimesh.Scene):
-                meshes = [
-                    g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)
-                ]
-                if meshes:
-                    mesh = trimesh.util.concatenate(meshes)
-                else:
-                    continue
-
-            # R_GF converts: file Y → geometry Z, file Z → geometry -Y
-            # This matches Drake's MakeFromOrthonormalColumns(UnitX, UnitZ, -UnitY).
-            R_GF = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float64)
-
-            # Transform chain: R_GF (Y-up to Z-up) → scale → link pose
-            verts = mesh.vertices @ R_GF.T  # Apply Y-up to Z-up first
-            verts = verts * scale_factor  # Then scale
-
-            # Apply link pose transform.
-            # Note: Link translations from URDF are in original (unscaled) coordinates,
-            # so we must scale them to match the scaled mesh geometry.
-            xyz, rot = link_poses[link_name]
-            xyz_scaled = xyz * scale_factor
-            verts_world = verts @ rot.T + xyz_scaled
-            all_verts_world.extend(verts_world)
-
-        except Exception as e:
-            console_logger.warning(f"Failed to load GLTF {gltf_path}: {e}")
-            continue
-
-    if not all_verts_world:
-        console_logger.warning("No mesh vertices found for SDF bounding box")
-        return np.zeros(3), np.zeros(3), np.zeros(3)
-
-    all_verts_world = np.array(all_verts_world)
-    min_xyz = np.min(all_verts_world, axis=0)
-    max_xyz = np.max(all_verts_world, axis=0)
-    center = (min_xyz + max_xyz) / 2
-
-    return min_xyz, max_xyz, center
+        for visual in link.findall("visual"):
+            mesh_elem = visual.find("geometry/mesh")
+            if mesh_elem is None:
+                raise ValueError(f"Unsupported non-mesh visual in {sdf_path}")
+            uri = mesh_elem.findtext("uri", "")
+            if uri.startswith("file://"):
+                uri = uri[7:]
+            mesh_path = Path(uri)
+            if not mesh_path.is_absolute():
+                mesh_path = sdf_path.parent / mesh_path
+            loaded = trimesh.load(mesh_path, force="scene")
+            # to_geometry applies each GLTF node transform, including instances.
+            mesh = loaded.to_geometry() if isinstance(loaded, trimesh.Scene) else loaded
+            if not isinstance(mesh, trimesh.Trimesh) or not len(mesh.vertices):
+                raise ValueError(f"Empty visual mesh: {mesh_path}")
+            verts = np.asarray(mesh.vertices).copy()
+            if mesh_path.suffix.lower() in (".gltf", ".glb"):
+                verts = verts @ np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]]).T
+            scale = np.fromstring(mesh_elem.findtext("scale", "1 1 1"), sep=" ")
+            if scale.shape != (3,) or not np.all(np.isfinite(scale)) or np.any(scale <= 0):
+                raise ValueError(f"Invalid mesh scale in {sdf_path}")
+            verts *= scale
+            pose = visual.find("pose")
+            local = np.eye(4)
+            parent = link.get("name")
+            if pose is not None:
+                values = np.fromstring(pose.text or "0 0 0 0 0 0", sep=" ")
+                local[:3, :3] = Rotation.from_euler("xyz", values[3:6]).as_matrix()
+                local[:3, 3] = values[:3]
+                parent = pose.get("relative_to", parent)
+            transform = resolve(parent) @ local
+            vertices.append(trimesh.transform_points(verts, transform))
+    if not vertices:
+        raise ValueError(f"No visual mesh vertices in {sdf_path}")
+    vertices = np.concatenate(vertices)
+    if not np.all(np.isfinite(vertices)):
+        raise ValueError(f"Non-finite visual vertices in {sdf_path}")
+    minimum, maximum = vertices.min(axis=0), vertices.max(axis=0)
+    if np.any(maximum - minimum <= 0):
+        raise ValueError(f"Degenerate visual bounds in {sdf_path}")
+    return minimum, maximum, (minimum + maximum) / 2
 
 
 def update_sdf_model_pose(

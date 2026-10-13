@@ -78,6 +78,22 @@ class PartConstructorAgent(BaseAgent):
         return bool(getattr(part, "instances", []))
 
     def _build_generation_constraints(self, part: PartPlan) -> str:
+        runtime = (
+            "Runtime: Blender 4.4. Use valid bpy APIs: BevelModifier.use_clamp_overlap "
+            "(not clamp_overlap), profile_type='SUPERELLIPSE' (not 'ROUND'), and "
+            "profile=0.5. Do not assign custom_profile. ShaderNodeMixRGB uses 'Fac', "
+            "'Color1', 'Color2' and output 'Color'; ShaderNodeMix uses different sockets. "
+            "Do not mix these node APIs.\n"
+            "PartPlan.position is the intended world-space CENTER of the part bounds. "
+            "Build internal geometry centered around local (0,0,0), set the joined object's "
+            "origin to (0,0,0) before applying the final PartPlan position exactly once. "
+            "Do not leave the joined origin at the first panel's center. The final world "
+            "bounds must agree with the PartPlan center and dimensions. Keep required "
+            "tabletops closed and usable, and preserve all structural surfaces.\n"
+        )
+        return runtime + self._build_movable_constraints(part)
+
+    def _build_movable_constraints(self, part: PartPlan) -> str:
         """按部件语义生成补充约束，减少可动件连体错误。"""
         if not self._is_movable_part(part):
             return ""
@@ -362,8 +378,14 @@ Additional hard constraints (movable part):
             render_output_dir = os.path.join(os.path.dirname(output_dir), "renders", "parts")
         os.makedirs(render_output_dir, exist_ok=True)
         
+        from scenecode.utils.model_audit import audit_context
+        audit_context.set({**audit_context.get(), "part": part.name, "stage": "construction", "execution_attempt": 0})
+        code_path = os.path.join(output_dir, f"{part.name}.py")
+        validate_positions = self.config.get("pipeline", {}).get("validate_part_positions", False)
         # 生成代码
-        if use_llm:
+        if validate_positions and os.path.exists(code_path):
+            code = Path(code_path).read_text()
+        elif use_llm:
             generation_constraints = self._build_generation_constraints(part)
             code = await self._generate_code_with_llm(
                 part,
@@ -414,14 +436,26 @@ Additional hard constraints (movable part):
                         break
 
                 self.logger.info(f"Executing code for {part.name} (attempt {execution_attempts})...")
+                from scenecode.utils.artifact_history import snapshot
+                from scenecode.utils.model_audit import audit_context
+                import time
+                audit_context.set({**audit_context.get(), "part": part.name, "execution_attempt": execution_attempts})
+                snapshot(code_path, code)
                 code_guard_error = self._validate_generated_code_for_part(part, code)
                 if code_guard_error:
                     execution_result = {"success": False, "error": code_guard_error}
                     self.logger.error(
                         f"Attempt {execution_attempts} blocked by code guard: {code_guard_error}"
                     )
+                    snapshot(code_path, execution_result, suffix=".error.json")
                     continue
-                execution_result = await self._execute_code(code)
+                execution_started = time.monotonic()
+                checked_code = code
+                if validate_positions:
+                    from ..utils.geometry_guard import part_position_guard
+                    checked_code += "\n" + part_position_guard(part)
+                execution_result = await self._execute_code(checked_code)
+                snapshot(code_path, {**execution_result, "execution_seconds": time.monotonic() - execution_started}, suffix=".execution.json")
                 if execution_result["success"]:
                     self.logger.info(f"Part {part.name} created successfully")
                     break
@@ -454,7 +488,7 @@ Additional hard constraints (movable part):
             part_name=part.name,
             actions=actions,
             final_code=code,
-            iterations=1
+            iterations=max(1, execution_attempts)
         )
         
         # 保存操作轨迹
@@ -521,13 +555,16 @@ Additional hard constraints (movable part):
         failed_parts = []
         
         total_parts = len(sorted_parts)
+        validate_positions = self.config.get("pipeline", {}).get("validate_part_positions", False)
+        if validate_positions:
+            construct_parts = True
         
         if construct_parts:
             for idx, part in enumerate(sorted_parts):
                 self.logger.info(f"\n--- Part {idx + 1}/{total_parts}: {part.name} ---")
                 
                 code_path = os.path.join(parts_dir, f"{part.name}.py")
-                if os.path.exists(code_path):
+                if os.path.exists(code_path) and not validate_positions:
                     self.logger.info(f"Part code already exists, skipping: {code_path}")
                     try:
                         with open(code_path, "r", encoding="utf-8") as f:

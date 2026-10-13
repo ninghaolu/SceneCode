@@ -262,6 +262,8 @@ class ObjectPlan:
     
     def save(self, filepath: str) -> None:
         """保存到文件"""
+        from scenecode.utils.artifact_history import snapshot
+        snapshot(filepath, self.to_dict())
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(self.to_json())
     
@@ -353,6 +355,8 @@ class ActionTrace:
         return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
     
     def save(self, filepath: str) -> None:
+        from scenecode.utils.artifact_history import snapshot
+        snapshot(filepath, self.to_dict())
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(self.to_json())
     

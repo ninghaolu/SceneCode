@@ -77,6 +77,52 @@ You are an expert furniture design auditor. Your task is to verify whether the O
 - **warning**: Important issue that should be fixed but is not blocking.
 - **suggestion**: Optional improvement.
 
+### Evidence required for blocking errors
+- Schema semantics: a PartPlan with `instances` is a TEMPLATE. Only its listed
+  instances are constructed; the template is not an extra physical object. Four
+  listed leg instances mean four legs, not five. The template retains dimensions
+  and a reference position by design. Do not request their removal or zero size.
+- Plans use object-local coordinates with the object center near the origin and
+  Z upward. Negative Z is valid. The completed asset is canonicalized and placed
+  on the room floor later. Evaluate relative support/contact between parts; do
+  not reject an entire coherent assembly merely because its bottom is below Z=0.
+- The planner normally normalizes the largest object dimension to 1. Room-scale
+  sizing happens later. Judge relative proportions in that normalized frame;
+  do not demand real-world sofa widths/depths independently, which would distort
+  aspect ratios. If rescaling is needed, every axis and part must scale together.
+- For rigid parts, `is_symmetric=true` with `symmetric_axis` describes a mirrored
+  counterpart. Its separate PartPlan is not missing merely because it is implicit.
+  Movable parts still require independent objects/instances as specified above.
+- A component can be supported by side contact or overlap with the base; its
+  bottom need not align with the base bottom. Different bottom coordinates alone
+  do not prove floating. Identify an actual separation from every supporting part.
+- Reserve errors for concrete defects: missing structural support or enclosure,
+  non-positive dimensions, demonstrable detached parts, impossible part placement,
+  or missing independence for a movable part. State the geometry and arithmetic.
+- A sliding or overlay door may project beyond the cabinet's front face. This is
+  normal construction, not itself a collision or dimensional error. Do not demand
+  that an overlay door be contained inside the cabinet body's bounding box.
+- Consider the parent's complete shape description and existing sub-parts before
+  claiming a wall is missing. A hollow cabinet shell can include its side, top,
+  bottom and back walls; require clarification if their construction is ambiguous,
+  rather than treating specific part names as proof of physical absence.
+- Uncertain shelf counts, decorative details, material differences, and preferred
+  proportions are warnings or suggestions unless they make the object unusable.
+- This leniency does not waive explicit requirements or clear reference geometry.
+  Flag a definite mismatch in requested part count, outward-facing construction,
+  or working-surface profile as an error. Distinguish a flat slab with rounded
+  outline corners from a pill-shaped volume; cite the plan field and reference
+  evidence instead of imposing an aesthetic preference.
+- Do not infer front/back from the sign of Y alone. The plan may use either
+  orientation if the doors, openings, shelves and back panels are consistent.
+- Check all errors in one pass. Reassess earlier advice against measured bounds;
+  do not alternate between contradictory placement preferences across revisions.
+- Check repeated support positions arithmetically. Four quarter-turns of (x,y)
+  produce (x,y), (-y,x), (-x,-y), (y,-x), not rectangular corners (+/-x,+/-y)
+  when abs(x) differs from abs(y). If copies lie outside their supporting base,
+  require explicit corner instances or an appropriate rectangular array. Do not
+  repair this by translating the entire array to its template position.
+
 ### Example output
 
 ```json

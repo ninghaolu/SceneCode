@@ -690,6 +690,9 @@ class BaseStatefulAgent(ABC):
             List of function tools for planner agent.
         """
 
+        critique_calls = 0
+        change_calls = 0
+
         @function_tool
         async def request_initial_design() -> str:
             """Request the designer to create the initial design.
@@ -702,6 +705,8 @@ class BaseStatefulAgent(ABC):
             """
             return await self._request_initial_design_impl()
 
+        # Keep names available after exhaustion: a repeated call must reach the
+        # budget guard rather than abort the SDK run as an unknown tool.
         @function_tool
         async def request_critique() -> str:
             """Request the critic to evaluate the current design.
@@ -712,6 +717,10 @@ class BaseStatefulAgent(ABC):
             Returns:
                 Critic's detailed evaluation with specific improvement suggestions.
             """
+            nonlocal critique_calls
+            if critique_calls >= self.cfg.max_critique_rounds:
+                return "Critique round budget exhausted. Finish the design report."
+            critique_calls += 1
             return await self._request_critique_impl()
 
         @function_tool
@@ -728,6 +737,10 @@ class BaseStatefulAgent(ABC):
             Returns:
                 Designer's report of what was changed.
             """
+            nonlocal change_calls
+            if change_calls >= self.cfg.max_critique_rounds:
+                return "Design-change round budget exhausted. Finish the design report."
+            change_calls += 1
             return await self._request_design_change_impl(instruction)
 
         tools: list[FunctionTool] = [request_initial_design]
@@ -815,13 +828,22 @@ class BaseStatefulAgent(ABC):
             placement_style=self.placement_style,
             **extra_kwargs,
         )
-        result = await Runner.run(
-            starting_agent=self.critic,
-            input=critique_instruction,
-            session=self.critic_session,
-            max_turns=self.cfg.agents.critic_agent.max_turns,
-            run_config=self._create_run_config(),
-        )
+        if self.cfg.agents.critic_agent.get("finish_on_turn_limit", False):
+            from scenecode.agent_utils.bounded_critic import run_bounded_critic
+
+            result = await run_bounded_critic(
+                agent=self.critic, instruction=critique_instruction,
+                session=self.critic_session,
+                max_turns=self.cfg.agents.critic_agent.max_turns,
+                run_config=self._create_run_config())
+        else:
+            result = await Runner.run(
+                starting_agent=self.critic,
+                input=critique_instruction,
+                session=self.critic_session,
+                max_turns=self.cfg.agents.critic_agent.max_turns,
+                run_config=self._create_run_config(),
+            )
         log_agent_usage(result=result, agent_name="CRITIC")
 
         # Parse structured output.

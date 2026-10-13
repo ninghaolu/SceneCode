@@ -311,6 +311,25 @@ def merge_objs_to_gltf(
     Raises:
         ValueError: If no valid meshes were imported.
     """
+    if threading.current_thread() is not threading.main_thread():
+        # Run bpy in the main thread of an isolated process. Agent tool calls
+        # arrive on worker threads; calling embedded bpy there is unsafe.
+        import json
+        import subprocess
+        import sys
+        payload = {"entries": [[str(e[0]), *e[1:]] for e in obj_paths_with_offsets],
+                   "output": str(output_path)}
+        script = (
+            "import json,sys; from pathlib import Path; "
+            "from scenecode.agent_utils.mesh_utils import merge_objs_to_gltf; "
+            "p=json.load(sys.stdin); "
+            "merge_objs_to_gltf([(Path(e[0]), *e[1:]) for e in p['entries']], Path(p['output']))"
+        )
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(payload),
+                                text=True, capture_output=True, timeout=180)
+        if result.returncode or not output_path.exists():
+            raise RuntimeError(f"Isolated mesh merge failed: {result.stderr[-3000:]}")
+        return output_path
     _ensure_bpy_main_thread("merge_objs_to_gltf")
 
     import bpy
@@ -487,6 +506,9 @@ def scale_mesh_uniformly_to_dimensions(
     # Calculate uniform scale factor (median to match target dimensions).
     # Use median instead of mean for robustness to near-degenerate dimensions.
     desired_array = np.array(desired_dimensions)
+    if mesh_path.suffix.lower() in {".gltf", ".glb"}:
+        # Public dimensions are width/depth/height (Z-up); GLTF stores Y-up.
+        desired_array = desired_array[[0, 2, 1]]
     scale_factors = desired_array / current_dimensions
     uniform_scale = np.median(scale_factors)
 

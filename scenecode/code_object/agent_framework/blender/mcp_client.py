@@ -101,6 +101,11 @@ class BlenderMCPClient:
         if not self._connected:
             return MCPResponse(success=False, error="Not connected")
 
+        from scenecode.utils.gpu_dispatch import enabled as gpu_dispatch_enabled
+        from scenecode.utils.gpu_blender_command import needs_gpu, dispatch_command
+        if gpu_dispatch_enabled() and needs_gpu(cmd_type, params):
+            return MCPResponse(**await dispatch_command(self, cmd_type, params))
+
         with acquire_blender_request_lock(f"code_object.mcp.{cmd_type}"):
             self._request_id += 1
             request = {

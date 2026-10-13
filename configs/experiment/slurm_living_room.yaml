@@ -1,0 +1,12 @@
+defaults:
+  - base_experiment
+  - _self_
+
+# Verbatim example from base_experiment.yaml.
+prompts:
+  - "A living room with a TV console, sofa, bookshelf, and coffee table."
+num_workers: 1
+pipeline:
+  start_stage: floor_plan
+  stop_stage: furniture
+  parallel_rooms: false

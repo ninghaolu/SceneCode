@@ -290,6 +290,16 @@ class StatefulFurnitureAgent(BaseStatefulAgent, BaseFurnitureAgent):
             runner_instruction = self.prompt_registry.get_prompt(
                 prompt_enum=FurnitureAgentPrompts.STATEFUL_PLANNER_RUNNER_INSTRUCTION,
             )
+            if self.cfg.asset_manager.get("resume_registry_path"):
+                asset_ids = [str(asset.object_id) for asset in self.asset_manager.registry.list_all()]
+                runner_instruction += (
+                    "\nThis is a resumed run. The following previously generated assets "
+                    f"are already loaded in the asset registry: {', '.join(asset_ids)}. "
+                    "Tell the designer to list_available_assets and reuse these exact IDs, "
+                    "generating only missing requested furniture. These assets are not yet "
+                    "placed or independently accepted; perform the usual placement, "
+                    "physics checks and visual critique. Do not duplicate existing assets."
+                )
 
             # Run the furniture placement workflow.
             result: RunResult = await Runner.run(

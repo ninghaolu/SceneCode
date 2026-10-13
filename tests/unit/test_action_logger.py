@@ -22,6 +22,18 @@ from scenecode.agent_utils.action_logger import (
 from scenecode.agent_utils.room import UniqueID
 
 
+def test_concurrent_action_writes_preserve_all_entries(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from scenecode.agent_utils.action_logger import _append_action_to_log
+    path = tmp_path / "actions.json"
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda i: _append_action_to_log(path, "move", {"id": i}), range(40)))
+    entries = json.loads(path.read_text())
+    assert len(entries) == 40
+    assert sorted(e["arguments"]["id"] for e in entries) == list(range(40))
+    assert [e["step_number"] for e in entries] == list(range(1, 41))
+
+
 class TestSerializeValue(unittest.TestCase):
     """Tests for _serialize_value function."""
 

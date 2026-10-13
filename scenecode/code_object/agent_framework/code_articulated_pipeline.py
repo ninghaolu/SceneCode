@@ -92,6 +92,7 @@ class CodeArticulatedPipeline:
         output_dir: str | None = None,
         skip_stages: list[str] | None = None,
         mesh_output_path: str | None = None,
+        feedback: str | None = None,
     ) -> CodeArticulatedPipelineResult:
         """Run the base Code_Object pipeline, then generate URDF if needed."""
         base_result: PipelineResult = await self.pipeline.run(
@@ -100,6 +101,7 @@ class CodeArticulatedPipeline:
             output_dir=output_dir,
             skip_stages=skip_stages,
             mesh_output_path=mesh_output_path,
+            **({"feedback": feedback} if feedback else {}),
         )
 
         resolved_output_dir = base_result.output_dir or (output_dir or "")

@@ -46,6 +46,7 @@ from scenecode.agent_utils.room import (
     extract_base_link_name_from_sdf,
 )
 from scenecode.utils.geometry_utils import compute_aabb_corners
+from scenecode.utils.gpu_dispatch import gpu_stage
 
 console_logger = logging.getLogger(__name__)
 
@@ -760,6 +761,7 @@ def render_plant(
     return rgba_image
 
 
+@gpu_stage
 def render_scene(
     scene: RoomScene,
     camera_X_WC: RigidTransform,
@@ -822,6 +824,7 @@ def render_scene(
     return image
 
 
+@gpu_stage
 def render_scene_for_agent_observation(
     scene: RoomScene,
     cfg: DictConfig,
@@ -1316,6 +1319,7 @@ def render_scene_for_agent_observation(
         raise
 
 
+@gpu_stage
 def save_scene_as_blend(
     scene: RoomScene,
     output_path: Path,
@@ -1418,6 +1422,7 @@ def save_scene_as_blend(
             server.stop()
 
 
+@gpu_stage
 def save_directive_as_blend(
     directive_path: Path,
     output_path: Path,

@@ -12,6 +12,8 @@ from agents import RunConfig, set_default_openai_client
 from openai import AsyncOpenAI, OpenAI
 from PIL import Image
 
+from scenecode.utils.model_audit import audited_http_client
+
 DEFAULT_OPENAI_API_BASE = os.environ.get(
     "OPENAI_API_BASE", "https://api.openai.com/v1"
 )
@@ -58,14 +60,14 @@ def create_openai_client(
     cfg: Any | None = None, api_base: str | None = None
 ) -> OpenAI:
     """Create a synchronous OpenAI client pinned to the configured API base."""
-    return OpenAI(base_url=get_openai_api_base(cfg=cfg, api_base=api_base))
+    return OpenAI(base_url=get_openai_api_base(cfg=cfg, api_base=api_base), **audited_http_client())
 
 
 def create_async_openai_client(
     cfg: Any | None = None, api_base: str | None = None
 ) -> AsyncOpenAI:
     """Create an async OpenAI client pinned to the configured API base."""
-    return AsyncOpenAI(base_url=get_openai_api_base(cfg=cfg, api_base=api_base))
+    return AsyncOpenAI(base_url=get_openai_api_base(cfg=cfg, api_base=api_base), **audited_http_client(asynchronous=True))
 
 
 def create_run_config(
@@ -89,7 +91,7 @@ async def close_cached_async_openai_clients() -> None:
 
     for client in cached_clients:
         try:
-            await client.aclose()
+            await client.close()
         except Exception as exc:
             console_logger.warning(
                 "Failed to close cached async OpenAI client during cleanup: %s", exc

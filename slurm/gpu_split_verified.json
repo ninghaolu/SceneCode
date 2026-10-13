@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "checks": {
+    "stateful_blender": {
+      "passed": true,
+      "bounds_unchanged": true
+    },
+    "floor_observation": {
+      "passed": true
+    },
+    "room_observation": {
+      "passed": true,
+      "images": [
+        "/scratch/nl2752/SceneCode/outputs/gpu_split_smoke_19258129/gpu_tasks/e0ae5284fc804e878e9aee4a06f99292/tmp/scene_render_jakq75sp/renders/0_side.png"
+      ]
+    },
+    "asset_observation": {
+      "passed": true
+    },
+    "final_export": {
+      "passed": true
+    }
+  },
+  "started_at": 1791250735.0860577,
+  "new_model_calls": 0,
+  "finished_at": 1791251317.7507548,
+  "source_sha256": {
+    "scenecode/utils/gpu_dispatch.py": "03bcc1d3033a2a2654541af73473f9ba0f1dd379e1e36508b085b92a46a24378",
+    "scenecode/utils/gpu_blender_command.py": "b126782bdb539d03b77a05c233c08473f195d281d5dc673fba7382e028dec980",
+    "scenecode/agent_utils/blender/server_manager.py": "8f114f428b247838d8119cf0e044978cade38f6f75015b690d36886d675f7aea",
+    "scenecode/agent_utils/rendering.py": "911f92ea47234e29f7abd2a92ab2323e3352542b153712151400cfd62054e5af",
+    "scenecode/floor_plan_agents/tools/vision_tools.py": "eacf2f6e12d1a470a8afa9acfef91fe3142ae9bd1f9e5f89f22e86ab5630cd16",
+    "scenecode/code_object/agent_framework/blender/mcp_client.py": "ef508f9494f01882accdcd1dccc2e3f391dd876a18876307dd4f229dd822179d"
+  }
+}

@@ -360,16 +360,34 @@ class StatefulFloorPlanAgent(BaseStatefulAgent, BaseFloorPlanAgent):
         critique_instruction = self.prompt_registry.get_prompt(
             prompt_enum=FloorPlanAgentPrompts.CRITIC_RUNNER_INSTRUCTION,
         )
+        critique_instruction += (
+            "\nOriginal user requirements (evaluate this scope, including when only "
+            "one room is requested):\n" + self.house_prompt
+            + "\nStage boundary: this agent creates only the architectural shell. "
+            "Furniture is generated and placed by the NEXT pipeline stage. Evaluate "
+            "whether the shell accommodates the requested furniture, but do not "
+            "penalize its absence or ask this stage to place furniture."
+        )
 
         # Run critic.
         # Critic will call observe_scene, render_ascii, and validate tools.
-        result = await Runner.run(
-            starting_agent=self.critic,
-            input=critique_instruction,
-            session=self.critic_session,
-            max_turns=self.cfg.agents.critic_agent.max_turns,
-            run_config=self._create_run_config(),
-        )
+        critic_turns = self.cfg.agents.critic_agent.max_turns
+        if critic_turns > 1:
+            from scenecode.agent_utils.bounded_critic import run_bounded_critic
+
+            # Reserve the last configured call for a schema-valid verdict from
+            # existing observations. Do not increase the floor critic's budget.
+            result = await run_bounded_critic(
+                agent=self.critic, instruction=critique_instruction,
+                session=self.critic_session, max_turns=critic_turns - 1,
+                run_config=self._create_run_config(),
+            )
+        else:
+            result = await Runner.run(
+                starting_agent=self.critic, input=critique_instruction,
+                session=self.critic_session, max_turns=critic_turns,
+                run_config=self._create_run_config(),
+            )
         log_agent_usage(result=result, agent_name="CRITIC (FLOOR PLAN)")
         vision_tools = self._get_vision_tools()
 

@@ -10,6 +10,7 @@ Also provides rescale_sdf() for in-place uniform scaling of SDF files.
 """
 
 import logging
+import json
 import xml.etree.ElementTree as ET
 
 from pathlib import Path
@@ -18,6 +19,7 @@ import numpy as np
 import trimesh
 
 from scenecode.agent_utils.materials import get_friction
+from scenecode.agent_utils.inertial_properties import compute_inertial_properties
 from scenecode.agent_utils.mesh_physics_analyzer import MeshPhysicsAnalysis
 from scenecode.utils.inertia_utils import fix_sdf_file_inertia
 from scenecode.utils.sdf_utils import (
@@ -79,16 +81,7 @@ def generate_drake_sdf(
     )
 
     # Load visual mesh to compute inertia.
-    visual_mesh = trimesh.load(visual_mesh_path, force="mesh")
-
-    # Handle Scene objects.
-    if isinstance(visual_mesh, trimesh.Scene):
-        meshes = [
-            geom
-            for geom in visual_mesh.geometry.values()
-            if isinstance(geom, trimesh.Trimesh)
-        ]
-        visual_mesh = trimesh.util.concatenate(meshes) if meshes else trimesh.Trimesh()
+    visual_mesh = trimesh.load(visual_mesh_path, force="scene").to_geometry()
 
     # Transform visual mesh from Y-up to Z-up for inertia computation.
     # Drake auto-converts Y-up GLTF visual meshes to Z-up on load, so inertial
@@ -98,49 +91,16 @@ def generate_drake_sdf(
     # Calculate inertial properties.
     mass = physics_analysis.mass_kg
 
-    # Validate mass is positive.
-    if mass <= 0:
-        raise ValueError(f"Mass must be positive, got {mass}")
-
-    # Get volume and validate.
-    volume = visual_mesh.volume
-    if volume <= 0:
-        # Try fixing normals - some assets have inverted normals causing negative volume.
-        console_logger.warning(
-            f"Mesh '{asset_name}' has negative volume ({volume:.6f}), "
-            f"attempting to fix normals..."
-        )
-        visual_mesh.fix_normals()
-        volume = visual_mesh.volume
-        if volume <= 0:
-            # Still negative - use absolute value. Mass from VLM is correct,
-            # we just need the magnitude for density calculation.
-            console_logger.warning(
-                f"Mesh '{asset_name}' still has negative volume ({volume:.6f}) "
-                f"after normal fix. Using absolute value."
-            )
-            volume = abs(volume)
-
-    density = mass / volume
-
-    # Get inertia tensor from trimesh (assumes uniform density).
-    # trimesh returns moment of inertia; we need to scale by density.
-    inertia_tensor = visual_mesh.moment_inertia * density
-
-    # Validate inertia tensor has positive eigenvalues.
-    # If invalid (e.g., from inverted mesh normals), set to None to omit from SDF.
-    eigenvalues = np.linalg.eigvals(inertia_tensor)
-    if np.any(eigenvalues < 0):
-        console_logger.warning(
-            f"Computed inertia tensor for '{asset_name}' has negative eigenvalues "
-            f"[{eigenvalues[0]:.3f}, {eigenvalues[1]:.3f}, {eigenvalues[2]:.3f}]. "
-            f"This indicates inverted mesh geometry. "
-            f"Using mass={mass:.3f}kg but omitting inertia tensor."
-        )
-        inertia_tensor = None  # Signal to omit tensor in SDF.
-
-    # Get center of mass.
-    center_of_mass = visual_mesh.center_mass
+    collision_zup = []
+    for piece in collision_pieces:
+        transformed = piece.copy()
+        transformed.apply_transform(YUP_TO_ZUP_TRANSFORM)
+        collision_zup.append(transformed)
+    center_of_mass, inertia_tensor, inertia_report = compute_inertial_properties(
+        visual_mesh, mass, collision_zup)
+    if inertia_report["basis"] != "visual_mesh":
+        console_logger.warning("Using collision-volume inertia approximation for %s: %s",
+                               asset_name, inertia_report["visual_issue"])
 
     # Get friction coefficient for material.
     friction = get_friction(physics_analysis.material)
@@ -165,17 +125,13 @@ def generate_drake_sdf(
         f"{center_of_mass[2]:.6f} 0 0 0"
     )
 
-    # Inertia tensor (only include if valid).
-    if inertia_tensor is not None:
-        inertia = ET.SubElement(inertial, "inertia")
-        ET.SubElement(inertia, "ixx").text = f"{inertia_tensor[0, 0]:.6e}"
-        ET.SubElement(inertia, "iyy").text = f"{inertia_tensor[1, 1]:.6e}"
-        ET.SubElement(inertia, "izz").text = f"{inertia_tensor[2, 2]:.6e}"
-        ET.SubElement(inertia, "ixy").text = f"{inertia_tensor[0, 1]:.6e}"
-        ET.SubElement(inertia, "ixz").text = f"{inertia_tensor[0, 2]:.6e}"
-        ET.SubElement(inertia, "iyz").text = f"{inertia_tensor[1, 2]:.6e}"
-    # If inertia_tensor is None, omit the <inertia> tag entirely.
-    # Drake will use default values (I_xx=I_yy=I_zz=1.0, products=0.0).
+    inertia = ET.SubElement(inertial, "inertia")
+    ET.SubElement(inertia, "ixx").text = f"{inertia_tensor[0, 0]:.6e}"
+    ET.SubElement(inertia, "iyy").text = f"{inertia_tensor[1, 1]:.6e}"
+    ET.SubElement(inertia, "izz").text = f"{inertia_tensor[2, 2]:.6e}"
+    ET.SubElement(inertia, "ixy").text = f"{inertia_tensor[0, 1]:.6e}"
+    ET.SubElement(inertia, "ixz").text = f"{inertia_tensor[0, 2]:.6e}"
+    ET.SubElement(inertia, "iyz").text = f"{inertia_tensor[1, 2]:.6e}"
 
     # Visual geometry (external mesh reference).
     visual = ET.SubElement(link, "visual", name="visual")
@@ -242,6 +198,7 @@ def generate_drake_sdf(
 
     # Fix any inertia tensors that violate the triangle inequality.
     fix_sdf_file_inertia(output_path)
+    output_path.with_suffix(".inertia.json").write_text(json.dumps(inertia_report, indent=2))
 
     console_logger.info(f"Generated Drake SDF: {output_path}")
 

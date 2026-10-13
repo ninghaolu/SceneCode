@@ -25,6 +25,7 @@ from scenecode.agent_utils.blender.server_manager import BlenderServer
 from scenecode.agent_utils.drake_utils import create_plant_from_dmd
 from scenecode.agent_utils.house import HouseLayout
 from scenecode.floor_plan_agents.tools.ascii_generator import generate_ascii_floor_plan
+from scenecode.utils.gpu_dispatch import gpu_stage
 from scenecode.utils.material import Material
 from scenecode.utils.openai import encode_image_to_base64
 
@@ -48,6 +49,73 @@ class RenderResult:
     message: str
     image_path: str = ""
     material_image_paths: list[str] | None = None  # Additional material preview images.
+
+
+@gpu_stage
+def render_floor_plan_directive(dmd_path, house_dir, blender, output_path, render_size):
+    # Create Drake plant from DMD.
+    # Explicitly pass house_dir as scene_dir for package://scene/ resolution.
+    builder, plant, scene_graph = create_plant_from_dmd(
+        dmd_path, scene_dir=house_dir
+    )
+
+    # Configure camera for Drake → Blender GLTF export.
+    # The actual camera position is computed by Blender from the geometry.
+    camera_config = CameraConfig(
+        name="floor_plan_camera",
+        X_PB=Transform(DrakeRigidTransform()),  # Placeholder, Blender computes.
+        width=4,  # Minimal, Blender uses config dimensions.
+        height=4,
+        renderer_class=RenderEngineGltfClientParams(
+            base_url=blender.get_url(),
+            render_endpoint="render_floor_plan",
+        ),
+    )
+
+    # Apply camera config (creates camera sensor in scene graph).
+    ApplyCameraConfig(
+        config=camera_config,
+        builder=builder,
+        plant=plant,
+        scene_graph=scene_graph,
+    )
+
+    # Export color output port.
+    sensor_name = f"rgbd_sensor_{camera_config.name}"
+    builder.ExportOutput(
+        builder.GetSubsystemByName(sensor_name).color_image_output_port(),
+        "rgba_image",
+    )
+
+    # Build diagram and create context.
+    diagram = builder.Build()
+    context = diagram.CreateDefaultContext()
+
+    with acquire_blender_request_lock("render_floor_plan"):
+        # Set floor plan render config on Blender server.
+        config_response = requests.post(
+            f"{blender.get_url()}/set_floor_plan_config",
+            json={
+                "output_path": str(output_path),
+                "width": render_size,
+                "height": render_size,
+            },
+            timeout=10,
+        )
+        config_response.raise_for_status()
+        console_logger.info("Floor plan config set on Blender server")
+
+        # Evaluate → Drake sends GLTF → Blender renders to output_path.
+        console_logger.info("Triggering Drake → Blender render")
+        _ = diagram.GetOutputPort("rgba_image").Eval(context)
+
+    # Verify render succeeded.
+    if not output_path.exists():
+        raise RuntimeError(f"Render output not found: {output_path}")
+
+    console_logger.info(f"Floor plan rendered: {output_path}")
+
+    return output_path
 
 
 class FloorPlanVisionTools:
@@ -584,67 +652,7 @@ class FloorPlanVisionTools:
             blender = self.blender_server
             output_path = render_dir / "floor_plan.png"
 
-            # Create Drake plant from DMD.
-            # Explicitly pass house_dir as scene_dir for package://scene/ resolution.
-            builder, plant, scene_graph = create_plant_from_dmd(
-                dmd_path, scene_dir=house_dir
-            )
-
-            # Configure camera for Drake → Blender GLTF export.
-            # The actual camera position is computed by Blender from the geometry.
-            camera_config = CameraConfig(
-                name="floor_plan_camera",
-                X_PB=Transform(DrakeRigidTransform()),  # Placeholder, Blender computes.
-                width=4,  # Minimal, Blender uses config dimensions.
-                height=4,
-                renderer_class=RenderEngineGltfClientParams(
-                    base_url=blender.get_url(),
-                    render_endpoint="render_floor_plan",
-                ),
-            )
-
-            # Apply camera config (creates camera sensor in scene graph).
-            ApplyCameraConfig(
-                config=camera_config,
-                builder=builder,
-                plant=plant,
-                scene_graph=scene_graph,
-            )
-
-            # Export color output port.
-            sensor_name = f"rgbd_sensor_{camera_config.name}"
-            builder.ExportOutput(
-                builder.GetSubsystemByName(sensor_name).color_image_output_port(),
-                "rgba_image",
-            )
-
-            # Build diagram and create context.
-            diagram = builder.Build()
-            context = diagram.CreateDefaultContext()
-
-            with acquire_blender_request_lock("render_floor_plan"):
-                # Set floor plan render config on Blender server.
-                config_response = requests.post(
-                    f"{blender.get_url()}/set_floor_plan_config",
-                    json={
-                        "output_path": str(output_path),
-                        "width": self.render_size,
-                        "height": self.render_size,
-                    },
-                    timeout=10,
-                )
-                config_response.raise_for_status()
-                console_logger.info("Floor plan config set on Blender server")
-
-                # Evaluate → Drake sends GLTF → Blender renders to output_path.
-                console_logger.info("Triggering Drake → Blender render")
-                _ = diagram.GetOutputPort("rgba_image").Eval(context)
-
-            # Verify render succeeded.
-            if not output_path.exists():
-                raise RuntimeError(f"Render output not found: {output_path}")
-
-            console_logger.info(f"Floor plan rendered: {output_path}")
+            render_floor_plan_directive(dmd_path, house_dir, blender, output_path, self.render_size)
 
             # Add room labels to the rendered image.
             self._add_room_labels(output_path)

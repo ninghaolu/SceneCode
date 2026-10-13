@@ -98,6 +98,33 @@ obj.location = (x, y, z)
 
 ### 3. Common modifiers
 
+Use only modifiers needed by the PartPlan. `smooth` means smooth shading, not
+automatic Catmull-Clark subdivision. For rectangular slabs, cushions, and padded
+armrests, preserve broad faces, the planned finished dimensions, and contact with
+supports. A bare cube with subdivision becomes a shrunken ellipsoid even when
+its center is correct. Use bevels for soft edges; if subdivision is explicitly
+needed, create support geometry first. Apply modifiers in stack order (bevel
+before subdivision when that is the stack order), and check evaluated dimensions
+afterward. The examples below are alternatives, not a stack to apply to every part.
+
+For a rigid slab with rounded outline corners, preserve the broad planar working
+surface and upright side faces. Use small edge bevels; rounding the four outline
+corners does not call for rounding the full thickness into a pill profile.
+Keep large planar faces flat-shaded or use appropriate split/weighted normals
+so smooth bevel shading does not make a flat tabletop look inflated.
+
+Place slats, handles and front-face relief on the exposed side of their backing
+panel, not behind it. Derive outward direction from the cabinet opening/back
+panel and planned orientation (the default front is -Y). For a -Y-facing door,
+the relief must extend toward smaller Y than the backing's front surface.
+Check that the backing does not occlude the detail from the front view.
+
+For repeated parts, `position` identifies the template component, not the group's
+centroid. Keep a real component at that position. Do not translate a completed
+array so its centroid lands on the template position. Four rectangular support
+corners require explicit corner placements or rectangular offsets; a 90-degree
+radial array exchanges the X and Y offsets and is wrong for a non-square layout.
+
 ```python
 # Bevel
 bevel = obj.modifiers.new(name="Bevel", type='BEVEL')

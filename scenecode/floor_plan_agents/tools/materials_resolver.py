@@ -229,12 +229,16 @@ class MaterialsResolver:
         if self._available_materials is not None:
             return
 
-        self._available_materials = {}
+        # Tool calls may discover materials concurrently. Publish the cache only
+        # once populated so another request cannot mistake a partial cache for
+        # missing materials.
+        discovered_materials = {}
 
         if not self.materials_dir.exists():
             console_logger.warning(
                 f"Materials directory not found: {self.materials_dir}"
             )
+            self._available_materials = {}
             return
 
         # Find all material directories (contain texture files).
@@ -247,8 +251,9 @@ class MaterialsResolver:
                     if f.is_file()
                 )
                 if has_textures:
-                    self._available_materials[path.name] = path
+                    discovered_materials[path.name] = path
 
+        self._available_materials = discovered_materials
         console_logger.debug(
             f"Discovered {len(self._available_materials)} materials in "
             f"{self.materials_dir}"

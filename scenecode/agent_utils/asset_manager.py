@@ -298,6 +298,11 @@ class AssetManager:
         # Initialize registry with auto-save to enable incremental persistence.
         registry_path = generated_assets_dir / "asset_registry.json"
         self.registry = AssetRegistry(auto_save_path=registry_path)
+        resume_registry = cfg.asset_manager.get("resume_registry_path")
+        if resume_registry:
+            self.registry.load_from_file(Path(resume_registry))
+            self.registry.save_to_file(registry_path)
+            console_logger.info("Resumed %d saved assets", self.registry.size())
 
         # Initialize strategy-specific clients.
         self.general_asset_source = cfg.asset_manager.general_asset_source

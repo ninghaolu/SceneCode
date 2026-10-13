@@ -1,0 +1,42 @@
+[
+  {
+    "aliases": [
+      "coffee table",
+      "cocktail table"
+    ],
+    "path": "/scratch/nl2752/SceneCode/outputs/2026-09-27/08-25-27/scene_000/room_living_room/generated_assets/furniture/images/coffee_table_1790514726863.png",
+    "sha256": "74ecfd0d4095ffa8a5a9b7a8d0218df8e00a8718d8a38b5ad1f05b601fcdcce4",
+    "description": "A low wooden coffee table with a thick rounded rectangular slab tabletop and a smaller inset solid pedestal plinth; natural oak appearance. No separate legs or open lower shelf."
+  },
+  {
+    "aliases": [
+      "sofa",
+      "couch"
+    ],
+    "path": "/scratch/nl2752/SceneCode/outputs/2026-09-27/08-25-27/scene_000/room_living_room/generated_assets/furniture/images/sofa_1790512667697.png",
+    "sha256": "f5039c00f39150ee1880c1b399a2a9e8e039ffa6a1e3501b5de2753bcf72d96d",
+    "description": "A light gray upholstered three-seat sofa with three broad rectangular back cushions, three rectangular seat cushions, two full padded side armrests, a continuous base, and short wooden feet."
+  },
+  {
+    "aliases": [
+      "bookshelf",
+      "bookcase",
+      "book shelf"
+    ],
+    "path": "/scratch/nl2752/SceneCode/outputs/2026-09-27/08-25-27/scene_000/room_living_room/generated_assets/furniture/images/bookshelf_1790516107268.png",
+    "sha256": "3358f98a630750e26cae1b586306cf58bfe0bc86728c2d9911856e32a12863e3",
+    "description": "A tall open bookshelf with five horizontal oak shelves attached to two black rectangular metal side frames. No back panel or doors."
+  },
+  {
+    "aliases": [
+      "tv console",
+      "tv stand",
+      "media console",
+      "television console",
+      "entertainment center"
+    ],
+    "path": "/scratch/nl2752/SceneCode/outputs/2026-09-27/08-25-27/scene_000/room_living_room/generated_assets/furniture/images/tv_console_1790512151611.png",
+    "sha256": "b8935fc13ddba692881a59e2807bae25c0d3c5622fabcc2d6d515d8a50e07ade",
+    "description": "A low oak TV console with two slatted wooden sliding front doors, a central open black shelf compartment, a continuous wood top and cabinet body, and a black inset plinth base."
+  }
+]

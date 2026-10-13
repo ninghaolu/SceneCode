@@ -294,6 +294,7 @@ class AssetRouter:
         description: str,
         output_dir: Path | None = None,
         use_lenient: bool = False,
+        reference_image: Path | None = None,
     ) -> ValidationResult:
         """Validate a generated asset using VLM.
 
@@ -367,7 +368,32 @@ class AssetRouter:
 
         # Build message with images.
         user_content = [{"type": "text", "text": prompt}]
-        for img_base64 in encoded_images:
+        if reference_image is not None:
+            if not reference_image.is_file():
+                return ValidationResult(is_acceptable=False,
+                                        reason=f"Missing reference image: {reference_image}",
+                                        suggestions=["Restore the generation reference before validation"])
+            user_content[0]["text"] = (
+                "The FIRST image is the generation reference. The remaining images are different "
+                "views of ONE generated asset. Compare required parts, their count, arrangement "
+                "and major proportions against the reference; do not accept merely because the "
+                "object category matches. For this reference-guided generation, these requirements "
+                "override generic geometry/material leniency below: preserve explicitly requested "
+                "part counts, distinctive structural details, visible material categories/color families, "
+                "and usable support surfaces. A flat slab with rounded outline corners must retain "
+                "its broad planar top and slab profile; a pill-shaped or inflated volume is a mismatch. "
+                "Front-facing details must appear on the outward face: slats, handles or relief seen "
+                "only on an inward/rear face do not satisfy the reference. Parts hidden in rear/bottom "
+                "views are not missing if visible in the appropriate other views. Ignore lighting/camera "
+                "differences and fine texture fidelity. Describe concrete visible mismatches and reject "
+                "them; do not waive required structure as decorative simplification. Evidence in the "
+                "REFERENCE image does not prove the feature exists in the GENERATED views.\n" + prompt)
+            user_content.append({"type": "text", "text": "REFERENCE IMAGE: desired appearance only."})
+            user_content.append({"type": "image_url", "image_url": {
+                "url": f"data:image/png;base64,{encode_image_to_base64(reference_image)}"}})
+        for view_index, img_base64 in enumerate(encoded_images):
+            if reference_image is not None:
+                user_content.append({"type": "text", "text": f"GENERATED VIEW {view_index}: evaluate this mesh."})
             user_content.append(
                 {
                     "type": "image_url",
@@ -490,6 +516,18 @@ class AssetRouter:
         Returns:
             GeneratedGeometry, ArticulatedGeometry, or CodeArticulatedGeometry if successful; None if all strategies/candidates are exhausted.
         """
+        # Saved-image experiments define appearance through their fixed references.
+        # Use the same specification for construction AND candidate validation.
+        from scenecode.agent_utils.saved_images import SavedImageGenerator
+
+        if isinstance(image_generator, SavedImageGenerator):
+            requested_description = item.description
+            item.description = image_generator.reference_description(item.short_name, item.description)
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            with open(debug_dir / f"{item.short_name}_reference_spec_{time.time_ns()}.json", "w") as f:
+                json.dump({"requested_description": requested_description,
+                           "reference_description": item.description}, f, indent=2)
+
         for strategy in item.strategies:
             # Get strategy config.
             strategies_cfg = self.cfg.asset_manager.router.strategies
@@ -1341,6 +1379,7 @@ class AssetRouter:
                 style_context=style_context,
             )
 
+        feedback = None
         for attempt in range(max_retries):
             console_logger.info(
                 f"Code-generated attempt {attempt + 1}/{max_retries} "
@@ -1354,6 +1393,7 @@ class AssetRouter:
                 images_dir=images_dir,
                 code_object_dir=code_object_dir,
                 style_context=style_context,
+                feedback=feedback,
             )
             if result is None:
                 console_logger.warning(
@@ -1361,20 +1401,13 @@ class AssetRouter:
                 )
                 continue
 
-            is_final_attempt = attempt == max_retries - 1
-            if is_final_attempt:
-                console_logger.info(
-                    "Code-generated final attempt accepted without validation for "
-                    f"'{item.description}'"
-                )
-                return result
-
-            validation_dir = debug_dir / f"{item.short_name}_code_generated_validation"
+            validation_dir = debug_dir / f"{item.short_name}_code_generated_validation_{attempt + 1}_{time.time_ns()}"
             validation = self.validate_asset(
                 mesh_path=result.geometry_path,
                 description=item.description,
                 output_dir=validation_dir,
                 use_lenient=False,
+                reference_image=result.image_path,
             )
 
             if validation.is_acceptable:
@@ -1383,6 +1416,12 @@ class AssetRouter:
                     f"{validation.reason}"
                 )
                 return result
+
+            feedback = (f"The previous generated asset failed validation. Keep the reference image "
+                        f"and correct these specific issues: {validation.reason}\n"
+                        f"Suggestions: {validation.suggestions}")
+            validation_dir.mkdir(parents=True, exist_ok=True)
+            (validation_dir / "feedback_for_next_attempt.txt").write_text(feedback)
 
             console_logger.info(
                 f"Code-generated validation failed for '{item.description}': "
@@ -1485,6 +1524,26 @@ class AssetRouter:
             full_object_render_path=result.full_object_render_path,
         )
 
+    @staticmethod
+    def _code_object_context(item: AssetItem, feedback: str | None) -> str:
+        """Keep the requesting agent's proportions available to image planning."""
+        context = [f"Requested object description: {item.description}"]
+        if item.dimensions:
+            width, depth, height = item.dimensions
+            scale = max(width, depth, height)
+            context.append(
+                f"Requested overall dimensions in meters (width, depth, height): "
+                f"{[width, depth, height]}. With the maximum dimension normalized to 1, "
+                f"the target envelope is {[v / scale for v in item.dimensions]}. "
+                "Preserve these overall proportions when estimating every part's size and position "
+                "from the reference image. Fit the assembled parts, including supports and cushions, "
+                "within that envelope; merely declaring total_dimensions does not resize geometry. "
+                "The downstream conversion uses uniform scale and cannot correct an incorrect aspect ratio."
+            )
+        if feedback:
+            context.append(f"Previous validation feedback:\n{feedback}")
+        return "\n\n".join(context)
+
     def _generate_code_object_geometry(
         self,
         item: AssetItem,
@@ -1493,6 +1552,7 @@ class AssetRouter:
         images_dir: Path,
         code_object_dir: Path,
         style_context: str | None = None,
+        feedback: str | None = None,
     ) -> GeneratedGeometry | None:
         """Generate a single Code_Object candidate from a reference image."""
         prepared = self._prepare_code_object_inputs(
@@ -1512,6 +1572,7 @@ class AssetRouter:
                 image_path=image_path,
                 output_dir=output_dir,
                 config_path_override=config_path_override,
+                feedback=self._code_object_context(item, feedback),
             )
         except Exception as e:
             console_logger.error(
@@ -1534,6 +1595,7 @@ class AssetRouter:
         images_dir: Path,
         code_object_dir: Path,
         style_context: str | None = None,
+        feedback: str | None = None,
     ) -> GeneratedGeometry | CodeArticulatedGeometry | None:
         """Generate a single Code_Object articulated candidate from a reference image."""
         prepared = self._prepare_code_object_inputs(
@@ -1553,6 +1615,7 @@ class AssetRouter:
                 image_path=image_path,
                 output_dir=output_dir,
                 config_path_override=config_path_override,
+                feedback=self._code_object_context(item, feedback),
             )
         except Exception as e:
             console_logger.error(
@@ -1626,6 +1689,7 @@ class AssetRouter:
                 style_context=style_context,
             )
 
+        feedback = None
         for attempt in range(max_retries):
             console_logger.info(
                 f"Code-articulated attempt {attempt + 1}/{max_retries} "
@@ -1639,6 +1703,7 @@ class AssetRouter:
                 images_dir=images_dir,
                 code_object_dir=code_object_dir,
                 style_context=style_context,
+                feedback=feedback,
             )
             if result is None:
                 console_logger.warning(
@@ -1646,40 +1711,34 @@ class AssetRouter:
                 )
                 continue
 
-            is_final_attempt = attempt == max_retries - 1
-
-            if isinstance(result, CodeArticulatedGeometry):
-                console_logger.info(
-                    "Code-articulated candidate acquired for '%s'; deferring "
-                    "URDF-to-SDF conversion and validation to the main thread",
-                    item.description,
-                )
-                return result
-
-            if is_final_attempt:
-                console_logger.info(
-                    "Code-articulated rigid fallback final attempt accepted without validation for "
-                    f"'{item.description}'"
-                )
-                return result
-
-            validation_dir = debug_dir / f"{item.short_name}_code_generated_validation"
+            # Validate the generated mesh on every attempt. URDF conversion
+            # remains on the main thread in AssetManager.
+            if result.geometry_path is None or not result.geometry_path.is_file():
+                feedback = "The generated candidate has no usable validation mesh; export a complete mesh."
+                continue
+            validation_dir = debug_dir / f"{item.short_name}_code_articulated_validation_{attempt + 1}_{time.time_ns()}"
             validation = self.validate_asset(
                 mesh_path=result.geometry_path,
                 description=item.description,
                 output_dir=validation_dir,
                 use_lenient=False,
+                reference_image=result.image_path,
             )
 
             if validation.is_acceptable:
                 console_logger.info(
-                    f"Code-articulated rigid fallback validation passed for '{item.description}': "
+                    f"Code-articulated validation passed for '{item.description}': "
                     f"{validation.reason}"
                 )
                 return result
 
+            feedback = (f"Correct the previous candidate: {validation.reason}\n"
+                        f"Suggestions: {validation.suggestions}")
+            validation_dir.mkdir(parents=True, exist_ok=True)
+            (validation_dir / "feedback_for_next_attempt.txt").write_text(feedback)
+
             console_logger.info(
-                f"Code-articulated rigid fallback validation failed for '{item.description}': "
+                f"Code-articulated validation failed for '{item.description}': "
                 f"{validation.reason}. Suggestions: {validation.suggestions}"
             )
 

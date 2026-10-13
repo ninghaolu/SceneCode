@@ -809,6 +809,7 @@ print('scene cleared')
         output_dir: Optional[str] = None,
         skip_stages: List[str] = None,
         mesh_output_path: Optional[str] = None,
+        feedback: Optional[str] = None,
     ) -> PipelineResult:
         """
         执行 Pipeline（完整生成）。
@@ -824,6 +825,9 @@ print('scene cleared')
         """
         start_time = datetime.now()
         skip_stages = skip_stages or []
+        if self.config.get("pipeline", {}).get("validate_part_positions", False):
+            skip_stages = [s for s in skip_stages if s not in {
+                "construction", "export_parts", "render_full_object", "export_glb"}]
         stages_completed = []
         stages_failed = []
         object_plan = None
@@ -865,6 +869,10 @@ print('scene cleared')
                 with open(os.path.join(output_dir, "input_text.txt"), "w", encoding="utf-8") as f:
                     f.write((text_input or "").strip())
         self.logger.info("Output directory: %s", output_dir)
+        from scenecode.utils.model_audit import audit_context
+        audit_context.set({"asset_output_dir": str(output_dir)})
+        if feedback:
+            Path(output_dir, "delivered_feedback.txt").write_text(feedback)
         if not await self._connect_blender():
             raise RuntimeError("Failed to connect to Blender headless backend")
         self.logger.info("Clearing Blender scene...")
@@ -886,7 +894,8 @@ print('scene cleared')
                         object_plan = await self.planner.run(
                             image_path=image_path,
                             text_input=text_input,
-                            output_path=plan_path
+                            output_path=plan_path,
+                            additional_context=feedback or "",
                         )
                         stages_completed.append("planning")
                         self.logger.info(f"Planning completed: {len(object_plan.parts)} parts identified")
@@ -903,7 +912,8 @@ print('scene cleared')
                 self.logger.info("Stage 2: Plan Check")
                 self.logger.info("="*40)
                 
-                if "plan_check" not in skip_stages and object_plan:
+                if object_plan and ("plan_check" not in skip_stages or
+                                    self.config.get("pipeline", {}).get("require_valid_plan", False)):
                     try:
                         object_plan, check_history = await self.planner_checker.check_and_fix(
                             plan=object_plan,
@@ -914,6 +924,9 @@ print('scene cleared')
                         
                         # 保存更新后的 plan
                         object_plan.save(os.path.join(output_dir, "ObjectPlan.json"))
+                        if (self.config.get("pipeline", {}).get("require_valid_plan", False)
+                                and check_history and not check_history[-1].is_valid):
+                            raise RuntimeError("Plan still has checker errors after the configured retry limit")
                         
                         # 保存检查历史 并非实时保存，max_retry 后保存全部内容
                         if self.config.get("pipeline", {}).get("save_intermediate", True):
@@ -926,6 +939,8 @@ print('scene cleared')
                     except Exception as e:
                         self.logger.error(f"Plan check failed: {e}")
                         stages_failed.append("plan_check")
+                        if self.config.get("pipeline", {}).get("require_valid_plan", False):
+                            raise
                 else:
                     self.logger.info("Skipping plan check stage")
             
@@ -936,12 +951,15 @@ print('scene cleared')
             self.logger.info("="*40)
             
             construction_result = None
-            if "construction" not in skip_stages and object_plan:
+            if object_plan and ("construction" not in skip_stages or
+                                self.config.get("pipeline", {}).get("validate_part_positions", False)):
                 cached_result = self._check_existing_construction(output_dir, object_plan)
 
                 pipeline_cfg = self.config.get("pipeline", {})
-                enable_part_construct = pipeline_cfg.get("enable_part_construct", True)
-                use_cache = cached_result and enable_part_construct
+                enable_part_construct = (pipeline_cfg.get("enable_part_construct", True) or
+                                         pipeline_cfg.get("validate_part_positions", False))
+                use_cache = (cached_result and enable_part_construct and
+                             not pipeline_cfg.get("validate_part_positions", False))
 
                 if not use_cache:
                     try:
@@ -977,6 +995,10 @@ print('scene cleared')
                     self.logger.info("Using cached construction, skipping Part Constructor run")
             else:
                 self.logger.info("Skipping construction stage")
+
+            if (self.config.get("pipeline", {}).get("validate_part_positions", False)
+                    and "construction" in stages_failed):
+                raise RuntimeError("Part execution/geometry checks failed; export blocked")
 
             # ==================== Export Part Mesh Assets ====================
             pipeline_cfg = self.config.get("pipeline", {})
@@ -1077,6 +1099,8 @@ print('scene cleared')
             result_path = os.path.join(output_dir, "pipeline_result.json")
             with open(result_path, 'w', encoding='utf-8') as f:
                 json.dump(result.to_dict(), f, indent=2, ensure_ascii=False)
+            from scenecode.utils.artifact_history import snapshot
+            snapshot(result_path, result.to_dict())
             
             self.logger.info("\n" + "="*60)
             self.logger.info(f"Pipeline completed in {total_time:.2f} seconds")
@@ -1101,7 +1125,7 @@ print('scene cleared')
             self.logger.error(f"Pipeline failed with error: {e}")
             total_time = (datetime.now() - start_time).total_seconds()
             
-            return PipelineResult(
+            result = PipelineResult(
                 success=False,
                 object_name=object_plan.name if object_plan else "",
                 output_dir=output_dir,
@@ -1113,6 +1137,11 @@ print('scene cleared')
                 mesh_path=mesh_path,
                 parts_output_dir=parts_output_dir,
             )
+            result_path = Path(output_dir) / "pipeline_result.json"
+            result_path.write_text(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+            from scenecode.utils.artifact_history import snapshot
+            snapshot(result_path, result.to_dict())
+            return result
             
         finally:
             # 断开 Blender 连接

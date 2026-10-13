@@ -5,7 +5,10 @@ from .indoor_scene_generation import IndoorSceneGenerationExperiment
 
 # Each key has to be a yaml file under '[project_root]/configs/experiment'
 # without .yaml suffix.
-exp_registry = dict(indoor_scene_generation=IndoorSceneGenerationExperiment)
+exp_registry = dict(
+    indoor_scene_generation=IndoorSceneGenerationExperiment,
+    slurm_living_room=IndoorSceneGenerationExperiment,
+)
 
 
 def build_experiment(cfg: DictConfig) -> BaseExperiment:

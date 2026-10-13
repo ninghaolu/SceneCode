@@ -913,7 +913,10 @@ def _create_single_image_generator(
     backend: str, config: DictConfig, api_base: str | None = None
 ) -> BaseImageGenerator:
     """Create a single concrete image generator without fallback wrapping."""
-    if backend == "openai":
+    if backend == "saved":
+        from scenecode.agent_utils.saved_images import SavedImageGenerator
+        return SavedImageGenerator(config.saved.manifest)
+    elif backend == "openai":
         return OpenAIImageGenerator(
             quality=config.openai.quality,
             api_base=api_base,

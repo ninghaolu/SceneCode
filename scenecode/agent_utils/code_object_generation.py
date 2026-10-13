@@ -84,6 +84,7 @@ class CodeObjectRunner:
         image_path: Path,
         output_dir: Path,
         config_path_override: str | Path | None = None,
+        feedback: str | None = None,
     ) -> CodeObjectGenerationResult:
         """Run the Code_Object pipeline for a single reference image."""
         if not image_path.exists():
@@ -122,6 +123,7 @@ class CodeObjectRunner:
                         image_path=str(image_path),
                         output_dir=str(output_dir),
                         skip_stages=list(resume_state.skip_stages),
+                        **({"feedback": feedback} if feedback else {}),
                     )
                 )
 
@@ -186,6 +188,7 @@ class CodeObjectRunner:
         image_path: Path,
         output_dir: Path,
         config_path_override: str | Path | None = None,
+        feedback: str | None = None,
     ) -> CodeObjectGenerationResult:
         """Run the articulated Code_Object pipeline for a single reference image."""
         if not image_path.exists():
@@ -224,6 +227,7 @@ class CodeObjectRunner:
                         image_path=str(image_path),
                         output_dir=str(output_dir),
                         skip_stages=list(resume_state.skip_stages),
+                        **({"feedback": feedback} if feedback else {}),
                     )
                 )
 

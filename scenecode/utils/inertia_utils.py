@@ -106,7 +106,10 @@ def fix_sdf_file_inertia(sdf_path: Path) -> bool:
 
     any_modified = False
 
-    for inertia_elem in root.iter("inertia"):
+    for inertial_elem in root.iter("inertial"):
+        inertia_elem = inertial_elem.find("inertia")
+        if inertia_elem is None:
+            continue
         # Extract the 6 unique components of the symmetric 3x3 tensor.
         ixx = float(inertia_elem.findtext("ixx", "0"))
         iyy = float(inertia_elem.findtext("iyy", "0"))
@@ -123,7 +126,10 @@ def fix_sdf_file_inertia(sdf_path: Path) -> bool:
             ]
         )
 
-        fixed_tensor = ensure_valid_inertia(tensor)
+        # A massless anchor must retain exactly zero inertia. Projecting it to
+        # positive eigenvalues makes libsdformat divide by zero mass.
+        mass = float(inertial_elem.findtext("mass", "1"))
+        fixed_tensor = np.zeros((3, 3)) if mass == 0 else ensure_valid_inertia(tensor)
 
         if np.array_equal(fixed_tensor, tensor):
             console_logger.debug("Inertia tensor in '%s' already valid", sdf_path.name)

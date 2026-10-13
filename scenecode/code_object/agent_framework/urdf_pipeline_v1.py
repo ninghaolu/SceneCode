@@ -381,6 +381,14 @@ Hard output constraints:
         output_path = object_dir / f"{object_name}.urdf"
 
         if output_path.exists() and not dry_run:
+            if self.config.get("pipeline", {}).get("validate_part_positions", False):
+                from scenecode.code_object.agent_framework.utils.urdf_mesh_frames import normalize_exported_mesh_origins
+                from scenecode.utils.artifact_history import snapshot
+                original = output_path.read_text()
+                corrected = normalize_exported_mesh_origins(original)
+                if corrected.strip() != original.strip():
+                    snapshot(output_path, original, suffix=".raw.urdf")
+                    output_path.write_text(corrected + "\n")
             return URDFGenerationResult(
                 status="skipped",
                 object_dir=str(object_dir),
@@ -426,6 +434,12 @@ Hard output constraints:
                 urdf_text = await self._generate_urdf_with_llm(messages)
 
             self._validate_urdf(urdf_text)
+
+            if self.config.get("pipeline", {}).get("validate_part_positions", False):
+                from scenecode.code_object.agent_framework.utils.urdf_mesh_frames import normalize_exported_mesh_origins
+                from scenecode.utils.artifact_history import snapshot
+                snapshot(output_path, urdf_text, suffix=".raw.urdf")
+                urdf_text = normalize_exported_mesh_origins(urdf_text)
 
             if not dry_run:
                 with output_path.open("w", encoding="utf-8") as f:

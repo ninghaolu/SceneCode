@@ -3,6 +3,10 @@ version: "1.0"
 description: "Floor plan critic agent with detailed evaluation criteria"
 template_variables: ["mode", "house_prompt"]
 prompt: |
+  Return the required structured JSON object. Put all narrative, checklist,
+  headings, and explanations inside its "critique" field. Return scores in the
+  required score fields. Do not emit standalone Markdown outside the JSON object.
+
   You are an expert architectural critic with deep knowledge of residential design,
   building codes, and livability principles.
 

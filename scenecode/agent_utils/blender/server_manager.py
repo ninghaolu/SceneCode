@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import requests
+from scenecode.utils.gpu_dispatch import enabled as gpu_dispatch_enabled, gpu_stage
 
 from scenecode.agent_utils.blender.render_dataclasses import (
     ArticulatedRenderResult,
@@ -116,6 +117,9 @@ class BlenderServer:
             FileNotFoundError: If standalone server script not found.
             subprocess.SubprocessError: If server process fails to start.
         """
+        if gpu_dispatch_enabled():
+            self._running = True
+            return
         if self._running:
             raise RuntimeError("Server is already running")
 
@@ -355,6 +359,11 @@ class BlenderServer:
             self._server_process = None
 
         # Clean up temporary directory.
+        if self._temp_dir and os.getenv('SCENECODE_GPU_WORKER') == '1':
+            # Worker TMPDIR is a durable per-task shared directory. Returned render
+            # paths must survive the server and allocation that produced them.
+            self._temp_dir._finalizer.detach()
+            self._temp_dir = None
         if self._temp_dir:
             console_logger.debug(f"Cleaning up temp directory: {self._temp_dir.name}")
             self._temp_dir.cleanup()
@@ -385,6 +394,8 @@ class BlenderServer:
         Raises:
             RuntimeError: If the server is not running.
         """
+        if gpu_dispatch_enabled():
+            raise RuntimeError('A local render URL was requested in Slurm mode; dispatch the entire rendering operation')
         if not self.is_running():
             status = self.get_process_status()
             raise RuntimeError(f"Server is not running (status: {status})")
@@ -415,6 +426,8 @@ class BlenderServer:
             RuntimeError: If server is not running or doesn't become ready within
             timeout.
         """
+        if gpu_dispatch_enabled():
+            return
         if not self.is_running():
             raise RuntimeError("Server is not running")
 
@@ -442,6 +455,7 @@ class BlenderServer:
 
         raise RuntimeError(f"Server did not become ready within {timeout}s")
 
+    @gpu_stage
     def render_multiview_for_analysis(
         self,
         mesh_path: Path,
@@ -533,6 +547,7 @@ class BlenderServer:
             if temp_glb_path is not None and temp_glb_path.exists():
                 temp_glb_path.unlink()
 
+    @gpu_stage
     def canonicalize_mesh(
         self,
         input_path: Path,
@@ -581,6 +596,7 @@ class BlenderServer:
 
         return output_path
 
+    @gpu_stage
     def convert_glb_to_gltf(
         self,
         input_path: Path,
@@ -624,6 +640,7 @@ class BlenderServer:
         assert isinstance(result, Path)
         return result
 
+    @gpu_stage
     def render_multiview_articulated(
         self,
         link_meshes: list[LinkMeshInfo],

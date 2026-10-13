@@ -5,6 +5,9 @@ to enable deterministic replay of scene generation processes.
 """
 
 import inspect
+import fcntl
+import os
+import tempfile
 import json
 import logging
 
@@ -170,40 +173,52 @@ def _append_action_to_log(
                 f"Failed to serialize metadata for {tool_name}: {e}"
             ) from e
 
-    # Load existing log or create empty list.
-    if log_path.exists():
-        try:
-            with open(log_path, encoding="utf-8") as f:
-                log_entries = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            console_logger.warning(
-                f"Failed to load existing action log at {log_path}: {e}. Starting "
-                "new log."
-            )
+    # Serialize the entire read/modify/write across concurrent tool calls.
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path.with_suffix(log_path.suffix + ".lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # Load existing log or create empty list.
+        if log_path.exists():
+            try:
+                with open(log_path, encoding="utf-8") as f:
+                    log_entries = json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                console_logger.warning(
+                    f"Failed to load existing action log at {log_path}: {e}. Starting "
+                    "new log."
+                )
+                backup = log_path.with_name(log_path.name + f".corrupt.{datetime.now().timestamp()}")
+                backup.write_bytes(log_path.read_bytes())
+                log_entries = []
+        else:
             log_entries = []
-    else:
-        log_entries = []
 
-    # Create new entry.
-    step_number = len(log_entries) + 1
-    timestamp = datetime.now().isoformat()
-    entry = ActionLogEntry(
-        step_number=step_number,
-        timestamp=timestamp,
-        tool_name=tool_name,
-        arguments=serialized_args,
-        metadata=serialized_metadata,
-    )
+        # Create new entry.
+        step_number = len(log_entries) + 1
+        timestamp = datetime.now().isoformat()
+        entry = ActionLogEntry(
+            step_number=step_number,
+            timestamp=timestamp,
+            tool_name=tool_name,
+            arguments=serialized_args,
+            metadata=serialized_metadata,
+        )
 
-    # Append and save.
-    log_entries.append(asdict(entry))
-    try:
-        # Ensure parent directory exists.
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "w", encoding="utf-8") as f:
-            json.dump(log_entries, f, indent=2)
-    except IOError as e:
-        raise IOError(f"Failed to write action log to {log_path}: {e}") from e
+        # Append and save.
+        log_entries.append(asdict(entry))
+        try:
+            # Ensure parent directory exists.
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             dir=log_path.parent, delete=False) as f:
+                temporary_path = Path(f.name)
+                json.dump(log_entries, f, indent=2)
+            try:
+                os.replace(temporary_path, log_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+        except IOError as e:
+            raise IOError(f"Failed to write action log to {log_path}: {e}") from e
 
 
 def log_scene_action(func: Callable) -> Callable:
